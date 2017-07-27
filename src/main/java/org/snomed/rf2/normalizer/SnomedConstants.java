@@ -8,6 +8,10 @@ public interface SnomedConstants {
 	public String SEMANTIC_TAG_START = "(";
 	public static final String TYPE = "TYPE";
 	
+	public static final String SCTID_NONCON_EDITORIAL_POLICY = "723277005"; // |Nonconformance to editorial policy component (foundation metadata concept)|
+	public static final String SCTID_CORE_MODULE = "900000000000207008";
+	public static final String SCTID_DESC_INACTIVATION_REFSET = "900000000000490003"; // |Description inactivation indicator attribute value reference set (foundation metadata concept)|
+	
 	final String COMMA = ",";
 	final String QUOTE = "\"";
 	final String COMMA_QUOTE = ",\"";
@@ -31,7 +35,7 @@ public interface SnomedConstants {
 	public static String SCTID_PRIMITIVE = "900000000000074008";
 	public static String SCTID_FULLY_DEFINED = "900000000000073002";
 	
-	public enum Rf2File { CONCEPT, DESCRIPTION, STATED_RELATIONSHIP, RELATIONSHIP }
+	public enum Rf2File { CONCEPT, DESCRIPTION, STATED_RELATIONSHIP, RELATIONSHIP, LANGREFSET, ATTRIBUTE_VALUE }
 	
 	enum ComponentType { CONCEPT, DESCRIPTION, STATED_RELATIONSHIP, RELATIONSHIP }
 	

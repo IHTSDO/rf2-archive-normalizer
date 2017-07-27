@@ -12,6 +12,7 @@ import org.snomed.rf2.normalizer.SnomedConstants;
 import org.snomed.util.SnomedUtils;
 
 public class IdGenerator implements SnomedConstants {
+	private String generatorName;
 	private String fileName;
 	private BufferedReader availableSctIds;
 	private int dummySequence = 100;
@@ -20,25 +21,27 @@ public class IdGenerator implements SnomedConstants {
 	private String namespace = "";
 	private boolean isExtension = false;
 	
-	public static IdGenerator initiateIdGenerator(String sctidFilename) throws ApplicationException {
+	public static IdGenerator initiateIdGenerator(String generatorName, String sctidFilename) throws ApplicationException {
 		if (sctidFilename.toLowerCase().equals("dummy")) {
-			return new IdGenerator();
+			return new IdGenerator(generatorName);
 		}
 		
 		File sctIdFile = new File (sctidFilename);
 		try {
 			if (sctIdFile.canRead()) {
-				return new IdGenerator(sctIdFile);
+				return new IdGenerator(generatorName, sctIdFile);
 			}
 		} catch (Exception e) {}
 		
 		throw new ApplicationException("Unable to read sctids from " + sctidFilename);
 	}
-	private IdGenerator(File sctidFile) throws FileNotFoundException {
+	private IdGenerator(String generatorName, File sctidFile) throws FileNotFoundException {
+		this.generatorName = generatorName;
 		fileName = sctidFile.getAbsolutePath();
 		availableSctIds = new BufferedReader(new FileReader(sctidFile));
 	}
-	private IdGenerator() {
+	private IdGenerator(String generatorName) {
+		this.generatorName = generatorName;
 		useDummySequence = true;
 	}
 	
@@ -85,7 +88,7 @@ public class IdGenerator implements SnomedConstants {
 				availableSctIds.close();
 			}
 		} catch (Exception e){}
-		return "IdGenerator supplied " + idsAssigned + " sctids.";
+		return generatorName + " id generator supplied " + idsAssigned + " sctids.";
 	}
 	
 	public void isExtension(boolean b) {

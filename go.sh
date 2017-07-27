@@ -19,13 +19,15 @@ do
 	esac
 done
 
-effectiveTime="-t 20170628"
-deltaArchive="-d /Users/Peter/Google\ Drive/017_Drugs_ReModelling/2017/Disposition_Import_mkii.zip"
-releaseLocation="-p /Users/Peter/tmp/20170731_flat"
+effectiveTime="-t 20170724"
+deltaArchive="/Users/Peter/Google Drive/017_Drugs_ReModelling/2017/Disposition_Import_mkiii.zip"
+relIds="/Users/Peter/Google Drive/017_Drugs_ReModelling/2017/disposition_rel_sctids.txt"
+descIds="/Users/Peter/Google Drive/017_Drugs_ReModelling/2017/disposition_desc_sctids.txt"
+releaseLocation="/Users/Peter/tmp/20180131_flat "
 memParams="-Xms6g -Xmx10g"
-e
+
 set -x;
-#[-p previousRelease] [-r relationshipSCTIDs file] [-d deltaArchive]
-java -jar ${memParams} ${debugParams} target/rf2-archive-normalizer.jar ${releaseLocation} ${deltaArchive} ${effectiveTime} 
+#[-p previousRelease] [-r relationshipSCTIDs file] [-a deltaArchive] [-r relationshipId file] [-d descriptionId file]
+java -jar ${memParams} ${debugParams} target/rf2-archive-normalizer.jar -p ${releaseLocation} -a "${deltaArchive}" -r "${relIds}" -d "${descIds}" ${effectiveTime} 
 
 

@@ -9,8 +9,11 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -38,11 +41,16 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 	File revisedDeltaLocation;
 	File relationshipSctIds;
 	String outputDirName = "output";
+	Set<Rf2File> filesProcessed = new HashSet<Rf2File>();
+	List<String[]> inactivationIndicators = new ArrayList<String[]>();
+	List<String[]> langRefsetStorage = new ArrayList<String[]>();
 	
 	Map<Long, ? extends Concept> conceptMap;
 	Map<Long, List<ReportDetail>> report = new HashMap<Long, List<ReportDetail>>();
+	Map<String, String> replacedIds = new HashMap<String, String>();
 	Map<Long, Object> existingComponents;
-	IdGenerator idGenerator;
+	IdGenerator relIdGenerator;
+	IdGenerator descIdGenerator;
 
 	String[] targetEffectiveTimes;
 	Long maxTargetEffectiveTime;
@@ -88,11 +96,12 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 
 	private void init(String[] args) throws SQLException, ClassNotFoundException, ApplicationException {
 		if (args.length < 6) {
-			print ("Usage deltaProcessor [-p previousRelease] [-r relationshipSCTIDs file] [-d deltaArchive] [-t effectiveTime]");
+			print ("Usage deltaProcessor [-p previousRelease] [-r relationshipSCTIDs file] [-d descriptionSCTIDs file] [-a deltaArchive] [-t effectiveTime]");
 			System.exit(-1);
 		}
 		
-		idGenerator = IdGenerator.initiateIdGenerator("dummy");
+		relIdGenerator = IdGenerator.initiateIdGenerator("Relationship","dummy");
+		descIdGenerator = IdGenerator.initiateIdGenerator("Description", "dummy");
 		
 		for (int i=0; i < args.length; i++) {
 			if (args[i].equals("-p")) {
@@ -101,10 +110,12 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 					throw new ApplicationException("Could not read from directory " + args[i+1]);
 				}
 			} else if (args[i].equals("-r")) {
-				idGenerator = IdGenerator.initiateIdGenerator(args[i+1]);
+				relIdGenerator = IdGenerator.initiateIdGenerator("Relationship", args[i+1]);
+			} else if (args[i].equals("-d")) {
+				descIdGenerator = IdGenerator.initiateIdGenerator("Description", args[i+1]);
 			} else if (args[i].equals("-t")) {
 				maxTargetEffectiveTime = new Long(args[i+1]);
-			} else if (args[i].equals("-d")) {
+			} else if (args[i].equals("-a")) {
 				deltaArchive = new File (args[i+1]);
 				if (!deltaArchive.canRead()) {
 					throw new ApplicationException("Could not read from delta archive " + args[i+1]);
@@ -113,7 +124,7 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		}
 		
 		if (deltaArchive == null) {
-			throw new ApplicationException("Did not receive a deltaArchive parameter (-d) on command line");
+			throw new ApplicationException("Did not receive a deltaArchive parameter (-a) on command line");
 		}
 		
 		revisedDeltaRoot = Files.createTempDir();
@@ -131,8 +142,7 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 	}
 	
 
-	private void processDelta() throws ApplicationException {
-
+	private void processDelta() throws ApplicationException, FileNotFoundException, IOException {
 		try {
 			ZipInputStream zis = new ZipInputStream(new FileInputStream(deltaArchive));
 			ZipEntry ze = zis.getNextEntry();
@@ -142,6 +152,7 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 						Path p = Paths.get(ze.getName());
 						String fileName = p.getFileName().toString();
 						Rf2File rf2File = SnomedRf2File.getRf2File(fileName, FileType.DELTA);
+						filesProcessed.add(rf2File);
 						if (rf2File != null) {
 							processRf2Delta(zis, rf2File, fileName);
 						} else {
@@ -157,6 +168,15 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		} catch (IOException e) {
 			throw new ApplicationException("Failed to expand archive " + deltaArchive.getName(), e);
 		}
+		
+		//TODO If original input also included inactivation indicators, then we'll have to merge the two files
+		outputInactivationIndicators();
+		
+		//We need to process the lang refset afterwards, once we know what all the SCTIDs have been mapped to
+		outputLangRefset();
+		
+		//Output headers for any files that we haven't processed
+		SnomedRf2File.outputHeaders(revisedDeltaLocation, filesProcessed, edition, FileType.DELTA, languageCode, maxTargetEffectiveTime.toString());
 	}
 
 	private void processRf2Delta(InputStream is, Rf2File rf2File, String fileName) throws IOException, ApplicationException {
@@ -176,11 +196,16 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 					//Ensure that the effectiveTime is set to null for an import delta
 					lineItems[IDX_EFFECTIVETIME] = "";
 					switch (rf2File) {
+						//TODO We're processing the description file prior to the stated relationship file because of 
+						//alphabetic order, but if this changes, we'll need to store the file and process it last to ensure
+						//that all the descriptions are available for reporting.
 						case CONCEPT : processConcept(lineItems, rf2File, fileName, out);
 							break;
-						/*case DESCRIPTION : processDescription(lineItems, rf2File, fileName);
-							break; */
-						case STATED_RELATIONSHIP : processRelationship(lineItems, true, rf2File, fileName, out);
+						case DESCRIPTION : processDescription(lineItems, out);
+							break; 
+						case STATED_RELATIONSHIP : processRelationship(lineItems, true, out);
+							break;
+						case LANGREFSET : langRefsetStorage.add(lineItems);
 							break;
 						/*case RELATIONSHIP : processRelationship(lineItems, false, rf2File, fileName);
 							break;*/
@@ -218,16 +243,16 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		out.print(StringUtils.join(lineItems, FIELD_DELIMITER));
 		out.print(LINE_DELIMITER);
 	}
-	
 
-	private void processRelationship(String[] lineItems, boolean isStated, Rf2File rf2File, String fileName, PrintWriter out) throws NumberFormatException, ApplicationException {
-		//Have we seen this relationship before?
+	private void processRelationship(String[] lineItems, boolean isStated, PrintWriter out) throws NumberFormatException, ApplicationException {
 		Long id = new Long(lineItems[IDX_ID]);
 		Long conceptId = new Long (lineItems[REL_IDX_SOURCEID]);
 		Long typeId = new Long (lineItems[REL_IDX_TYPEID]);
 		Long destId = new Long (lineItems[REL_IDX_DESTINATIONID]);
 		ComponentType componentType = isStated? ComponentType.STATED_RELATIONSHIP : ComponentType.RELATIONSHIP;
 		String relStr = relationshipToString(typeId, destId);
+		
+		//Have we seen this relationship before?
 		if (existingComponents.containsKey(id)) {
 			//What changes have been made?
 			Relationship existingRelationship = (Relationship)existingComponents.get(id);
@@ -239,7 +264,7 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		} else {
 			//Do we need to replace this extension relationship with a core one?
 			if (SnomedUtils.isExtensionNamespace(id.toString())) {
-				lineItems[IDX_ID] = idGenerator.getSCTID(PartionIdentifier.RELATIONSHIP);
+				lineItems[IDX_ID] = relIdGenerator.getSCTID(PartionIdentifier.RELATIONSHIP);
 				id = new Long (lineItems[IDX_ID]);
 			}
 			//Report a new relationship being created
@@ -250,12 +275,88 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 				report (conceptId, componentType, id, ChangeType.UNKNOWN, "Unexpected inactive state on new relationship");
 			}
 		}
-		
+		//Output the revised line items to the revised file location
+		out.print(StringUtils.join(lineItems, FIELD_DELIMITER));
+		out.print(LINE_DELIMITER);
+	}
+	
+
+	private void processDescription(String[] lineItems, PrintWriter out) throws ApplicationException {
+		Long id = new Long(lineItems[IDX_ID]);
+		Long conceptId = new Long (lineItems[DES_IDX_CONCEPTID]);
+		String term = lineItems[DES_IDX_TERM];
+		//Have we seen this description before?
+		if (existingComponents.containsKey(id)) {
+			//What changes have been made?
+			Description existingDescription = (Description)existingComponents.get(id);
+			 if (!(existingDescription.isActive()?"1":"0").equals(lineItems[IDX_ACTIVE])) {
+				report (conceptId, ComponentType.DESCRIPTION, id, ChangeType.MODIFIED, "Active state changed to " + lineItems[IDX_ACTIVE] + ": " + term);
+				if (lineItems[IDX_ACTIVE].equals(INACTIVE_FLAG)) {
+					addInactivationIndicator(id, SCTID_NONCON_EDITORIAL_POLICY);
+				}
+			 } else {
+				report (conceptId, ComponentType.DESCRIPTION, id, ChangeType.UNKNOWN, "Unknown change.");
+			}
+		} else {
+			//Do we need to replace this extension Description with a core one?
+			if (SnomedUtils.isExtensionNamespace(id.toString())) {
+				String origId = lineItems[IDX_ID];
+				lineItems[IDX_ID] = descIdGenerator.getSCTID(PartionIdentifier.DESCRIPTION);
+				id = new Long (lineItems[IDX_ID]);
+				replacedIds.put(origId, lineItems[IDX_ID]);
+			}
+			//Report a new Description being created
+			String msg = "New Description: " + term;
+			if (lineItems[IDX_ACTIVE].equals(ACTIVE_FLAG)) {
+				report (conceptId, ComponentType.DESCRIPTION, id, ChangeType.NEW, msg);
+			} else {
+				report (conceptId, ComponentType.DESCRIPTION, id, ChangeType.UNKNOWN, "Unexpected inactive state on new Description");
+			}
+		}
+		//Output the revised line items to the revised file location
+		out.print(StringUtils.join(lineItems, FIELD_DELIMITER));
+		out.print(LINE_DELIMITER);
+	}
+	
+
+	private void outputLangRefset() throws FileNotFoundException, IOException {
+		String refsetFile = SnomedRf2File.getOutputFile(revisedDeltaLocation, Rf2File.LANGREFSET, edition, FileType.DELTA, languageCode, maxTargetEffectiveTime.toString());
+		try(	OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(refsetFile, true), StandardCharsets.UTF_8);
+				BufferedWriter bw = new BufferedWriter(osw);
+				PrintWriter out = new PrintWriter(bw)) {
+			
+			for (String[] langRefsetRow : langRefsetStorage) {
+				//If the referencedComponentId has been mapped to a new ID, we need to use that mapped value
+				if (replacedIds.containsKey(langRefsetRow[LANG_IDX_REFCOMPID])) {
+					langRefsetRow[LANG_IDX_REFCOMPID] = replacedIds.get(langRefsetRow[LANG_IDX_REFCOMPID]);
+				}
+				//Output the revised line items to the revised file location
+				out.print(StringUtils.join(langRefsetRow, FIELD_DELIMITER));
+				out.print(LINE_DELIMITER);
+			}
+		}
 	}
 
 
-	private String relationshipToString(Long typeId, Long destId) {
+
+	// id	effectiveTime	active	moduleId	refsetId	referencedComponentId	valueId
+	private void addInactivationIndicator(Long descriptionId, String inactivationReasonSCTID) {
+		String[] row = new String[7];
+		row[0] = UUID.randomUUID().toString().toLowerCase();
+		row[1] = ""; //No effectiveTime for a delta import
+		row[2] = "1"; //active
+		row[3] = SCTID_CORE_MODULE;
+		row[4] = SCTID_DESC_INACTIVATION_REFSET;
+		row[5] = descriptionId.toString();
+		row[6] = inactivationReasonSCTID;
+		inactivationIndicators.add(row);
+	}
+
+	private String relationshipToString(Long typeId, Long destId) throws ApplicationException {
 		String typeStr = SnomedUtils.deconstructFSN(conceptMap.get(typeId).getFsn())[0];
+		if (conceptMap.get(destId) == null) {
+			throw new ApplicationException ("No knowledge of concept " + destId + " used in relationship");
+		}
 		String destStr = SnomedUtils.deconstructFSN(conceptMap.get(destId).getFsn())[0];
 		return typeStr + " -> " + destId + "|"  + destStr + "|";
 	}
@@ -278,11 +379,28 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 
 		// Load SNOMED CT components into memory
 		ComponentStore componentStore = new ComponentStore();
-		LoadingProfile loadingProfile = LoadingProfile.light.withFullRelationshipObjects().withStatedRelationships().withInactiveComponents();
+		LoadingProfile loadingProfile = LoadingProfile.complete;
 		releaseImporter.loadSnapshotReleaseFiles(releaseLocationStr, loadingProfile, new ComponentFactoryImpl(componentStore));
 		conceptMap = componentStore.getConcepts();
 	}
-	
+
+	private void outputInactivationIndicators() throws FileNotFoundException, IOException, ApplicationException {
+		String inactivationFile = SnomedRf2File.getOutputFile(revisedDeltaLocation, Rf2File.ATTRIBUTE_VALUE, edition, FileType.DELTA, languageCode, maxTargetEffectiveTime.toString());
+		SnomedUtils.ensureFileExists(inactivationFile);
+		try(	OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(inactivationFile, true), StandardCharsets.UTF_8);
+				BufferedWriter bw = new BufferedWriter(osw);
+				PrintWriter out = new PrintWriter(bw)) {
+			SnomedRf2File inactivationMetadata = SnomedRf2File.get(Rf2File.ATTRIBUTE_VALUE);
+			//Output the file headers
+			out.print(inactivationMetadata.getHeader() + LINE_DELIMITER);
+			//And the rest of the rows
+			for (String[] row : inactivationIndicators) {
+				out.print(StringUtils.join(row, FIELD_DELIMITER));
+				out.print(LINE_DELIMITER);
+			}
+		}
+		filesProcessed.add(Rf2File.ATTRIBUTE_VALUE);
+	}
 
 	private void outputReport() throws IOException {
 		
@@ -330,7 +448,8 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 	}
 
 	private void cleanUp() {
-		print (idGenerator.finish());
+		print (relIdGenerator.finish());
+		print (descIdGenerator.finish());
 		print("Cleaning up...");
 		GlobalUtils.delete(revisedDeltaRoot);
 	}
