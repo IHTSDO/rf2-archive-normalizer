@@ -12,6 +12,10 @@ public interface SnomedConstants {
 	public static final String SCTID_CORE_MODULE = "900000000000207008";
 	public static final String SCTID_DESC_INACTIVATION_REFSET = "900000000000490003"; // |Description inactivation indicator attribute value reference set (foundation metadata concept)|
 	
+	static final String SCTID_ENTIRE_TERM_CASE_SENSITIVE = "900000000000017005";
+	static final String SCTID_ENTIRE_TERM_CASE_INSENSITIVE = "900000000000448009";
+	static final String SCTID_ONLY_INITIAL_CHAR_CASE_INSENSITIVE = "900000000000020002";
+	
 	final String COMMA = ",";
 	final String QUOTE = "\"";
 	final String COMMA_QUOTE = ",\"";

@@ -313,12 +313,22 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 				report (conceptId, ComponentType.DESCRIPTION, id, ChangeType.UNKNOWN, "Unexpected inactive state on new Description");
 			}
 		}
+		
+		//Check the case significance and change if necessary
+		String sctIdCaseSignificance = lineItems[DES_IDX_CASESIGNIFICANCEID];
+		if (sctIdCaseSignificance.equals(SCTID_ONLY_INITIAL_CHAR_CASE_INSENSITIVE) && !isCaseSensitive(term)) {
+			lineItems[DES_IDX_CASESIGNIFICANCEID] = SCTID_ENTIRE_TERM_CASE_INSENSITIVE;
+			report (conceptId, ComponentType.DESCRIPTION, id, ChangeType.MODIFIED, "Case significance cI corrected to ci" );
+		} else if (sctIdCaseSignificance.equals(SCTID_ENTIRE_TERM_CASE_INSENSITIVE) && isCaseSensitive(term)) {
+			lineItems[DES_IDX_CASESIGNIFICANCEID] = SCTID_ONLY_INITIAL_CHAR_CASE_INSENSITIVE;
+			report (conceptId, ComponentType.DESCRIPTION, id, ChangeType.MODIFIED, "Case significance ci corrected to cI" );
+		}
+			
 		//Output the revised line items to the revised file location
 		out.print(StringUtils.join(lineItems, FIELD_DELIMITER));
 		out.print(LINE_DELIMITER);
 	}
 	
-
 	private void outputLangRefset() throws FileNotFoundException, IOException {
 		String refsetFile = SnomedRf2File.getOutputFile(revisedDeltaLocation, Rf2File.LANGREFSET, edition, FileType.DELTA, languageCode, maxTargetEffectiveTime.toString());
 		try(	OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(refsetFile, true), StandardCharsets.UTF_8);
@@ -438,6 +448,13 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 
 	private void print (String msg)  {
 		System.out.println(msg);
+	}
+	
+	
+	private boolean isCaseSensitive(String term) {
+		String afterFirst = term.substring(1);
+		boolean allLowerCase = afterFirst.equals(afterFirst.toLowerCase());
+		return !allLowerCase;
 	}
 	
 	private static String timeDiff (Timestamp earlier, Timestamp later) {
