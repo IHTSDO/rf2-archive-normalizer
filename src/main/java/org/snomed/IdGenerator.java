@@ -59,8 +59,10 @@ public class IdGenerator implements SnomedConstants {
 		}
 		
 		if (sctId == null || sctId.isEmpty()) {
-			//Use RuntimeException to ensure we bomb all the way out.
-			throw new RuntimeException("No more SCTIDs in file " + fileName + " need more than " + idsAssigned);
+			//Report switch to use dummy strategy
+			useDummySequence = true;
+			System.out.println(generatorName + " run out of Ids at " + idsAssigned + " switching to dummy...");
+			return getSCTID(partitionIdentifier); 
 		}
 		//Check the SCTID is valid, and belongs to the correct partition
 		SnomedUtils.isValid(sctId, partitionIdentifier, true);  //throw exception if not valid

@@ -19,8 +19,8 @@ do
 	esac
 done
 
-effectiveTime="-t 20170724"
-deltaArchive="/Users/Peter/Google Drive/017_Drugs_ReModelling/2017/Disposition_Import_mkiii.zip"
+effectiveTime="-t 20170926"
+deltaArchive="/Users/Peter/Google Drive/017_Drugs_ReModelling/2017/Disposition_Import_mkiv.zip"
 relIds="/Users/Peter/Google Drive/017_Drugs_ReModelling/2017/disposition_rel_sctids.txt"
 descIds="/Users/Peter/Google Drive/017_Drugs_ReModelling/2017/disposition_desc_sctids.txt"
 releaseLocation="/Users/Peter/tmp/20180131_flat "
