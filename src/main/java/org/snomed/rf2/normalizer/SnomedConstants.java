@@ -8,6 +8,8 @@ public interface SnomedConstants {
 	public String SEMANTIC_TAG_START = "(";
 	public static final String TYPE = "TYPE";
 	
+	public static final String SCTID_CONCEPT_IS_A = "116680003";
+	
 	public static final String SCTID_NONCON_EDITORIAL_POLICY = "723277005"; // |Nonconformance to editorial policy component (foundation metadata concept)|
 	public static final String SCTID_CORE_MODULE = "900000000000207008";
 	public static final String SCTID_DESC_INACTIVATION_REFSET = "900000000000490003"; // |Description inactivation indicator attribute value reference set (foundation metadata concept)|
@@ -45,7 +47,7 @@ public interface SnomedConstants {
 	
 	enum PartionIdentifier {CONCEPT, DESCRIPTION, RELATIONSHIP};
 	
-	enum ChangeType { NEW, INACTIVATION, REACTIVATION, MODIFIED, UNKNOWN }
+	enum ChangeType { NEW, INACTIVATION, REACTIVATION, MODIFIED, UNKNOWN, NONE, WARNING }
 	
 	public static final String LINE_DELIMITER = "\r\n";
 	public static final String ACTIVE_FLAG = "1";

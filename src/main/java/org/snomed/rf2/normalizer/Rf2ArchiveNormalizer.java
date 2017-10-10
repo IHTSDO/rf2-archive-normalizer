@@ -17,6 +17,7 @@ import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.ihtsdo.otf.snomedboot.ComponentStore;
 import org.ihtsdo.otf.snomedboot.ReleaseImportException;
@@ -26,6 +27,8 @@ import org.ihtsdo.otf.snomedboot.domain.Description;
 import org.ihtsdo.otf.snomedboot.domain.Relationship;
 import org.ihtsdo.otf.snomedboot.factory.LoadingProfile;
 import org.ihtsdo.otf.snomedboot.factory.implementation.standard.ComponentFactoryImpl;
+import org.ihtsdo.otf.snomedboot.factory.implementation.standard.ConceptImpl;
+import org.ihtsdo.otf.snomedboot.factory.implementation.standard.RelationshipImpl;
 import org.snomed.ApplicationException;
 import org.snomed.IdGenerator;
 import org.snomed.util.GlobalUtils;
@@ -51,6 +54,7 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 	Map<Long, Object> existingComponents;
 	IdGenerator relIdGenerator;
 	IdGenerator descIdGenerator;
+	String[] suppressParents = new String[0];
 
 	String[] targetEffectiveTimes;
 	Long maxTargetEffectiveTime;
@@ -120,6 +124,9 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 				if (!deltaArchive.canRead()) {
 					throw new ApplicationException("Could not read from delta archive " + args[i+1]);
 				}
+			} else if (args[i].equals("-s")) {
+				suppressParents = (args[i+1]).split(COMMA);
+				print ("Suppressing parent relationships for " + args[i+1]);
 			}
 		}
 		
@@ -154,7 +161,11 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 						Rf2File rf2File = SnomedRf2File.getRf2File(fileName, FileType.DELTA);
 						filesProcessed.add(rf2File);
 						if (rf2File != null) {
-							processRf2Delta(zis, rf2File, fileName);
+							List<String> lines = IOUtils.readLines(zis, "UTF-8");
+							if (suppressParents.length > 0 && rf2File.equals(Rf2File.STATED_RELATIONSHIP) ) {
+								preProcessRelationships(lines); 
+							}
+							processRf2Delta(lines, rf2File, fileName);
 						} else {
 							print ("Skipping unrecognised file: " + fileName);
 						}
@@ -179,18 +190,16 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		SnomedRf2File.outputHeaders(revisedDeltaLocation, filesProcessed, edition, FileType.DELTA, languageCode, maxTargetEffectiveTime.toString());
 	}
 
-	private void processRf2Delta(InputStream is, Rf2File rf2File, String fileName) throws IOException, ApplicationException {
+	private void processRf2Delta(List<String> lines, Rf2File rf2File, String fileName) throws IOException, ApplicationException {
 		//Not putting this in a try resource block otherwise it will close the stream on completion and we've got more to read!
 		print ("Processing " + fileName);
-		BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-		String line;
 		boolean isHeader = true;
 		String outputFile = SnomedRf2File.getOutputFile(revisedDeltaLocation, rf2File, edition, FileType.DELTA, languageCode, maxTargetEffectiveTime.toString());
 		SnomedUtils.ensureFileExists(outputFile);
 		try(	OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(outputFile, true), StandardCharsets.UTF_8);
 				BufferedWriter bw = new BufferedWriter(osw);
 				PrintWriter out = new PrintWriter(bw))  {
-			while ((line = br.readLine()) != null) {
+			for (String line : lines) {
 				if (!isHeader) {
 					String[] lineItems = line.split(FIELD_DELIMITER);
 					//Ensure that the effectiveTime is set to null for an import delta
@@ -243,34 +252,85 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		out.print(StringUtils.join(lineItems, FIELD_DELIMITER));
 		out.print(LINE_DELIMITER);
 	}
+	
+
+	private void preProcessRelationships(List<String> lines) {
+		boolean isHeader = true;
+		int added = 0;
+		int removed = 0;
+		int suppressed = 0;
+		for (String line : lines) {
+			String[] lineItems = line.split(FIELD_DELIMITER);
+			if (!isHeader) {
+				Relationship r = fromRf2(lineItems);
+				//Only interested in IS_A relationships
+				if (r.getTypeId().equals(SCTID_CONCEPT_IS_A) && !isSuppressed(r.getDestinationId())) {
+					ConceptImpl concept = (ConceptImpl)conceptMap.get(new Long(r.getSourceId()));
+					ConceptImpl parent = (ConceptImpl)conceptMap.get(new Long(r.getDestinationId()));
+					if (r.getActive().equals(ACTIVE_FLAG)) {
+						concept.addStatedParent(parent);
+						added++;
+					} else {
+						concept.removeStatedParent(parent);
+						removed++;
+					}
+				} else if (isSuppressed(r.getDestinationId())) {
+					suppressed++;
+				}
+			} else {
+				isHeader = false;
+			}
+		}
+		print ("Preprocessing parent changes indicates: " + added + " added, " + removed + " removed and " + suppressed + " suppressed");
+	}
+	
+	private boolean isSuppressed (String parent) {
+		for (String suppressed : suppressParents) {
+			if (parent.equals(suppressed)) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	private void processRelationship(String[] lineItems, boolean isStated, PrintWriter out) throws NumberFormatException, ApplicationException {
-		Long id = new Long(lineItems[IDX_ID]);
-		Long conceptId = new Long (lineItems[REL_IDX_SOURCEID]);
-		Long typeId = new Long (lineItems[REL_IDX_TYPEID]);
-		Long destId = new Long (lineItems[REL_IDX_DESTINATIONID]);
+
+		Relationship r = fromRf2(lineItems);
+		Long conceptId = new Long(r.getSourceId());
+		Long id = new Long(r.getId());
 		ComponentType componentType = isStated? ComponentType.STATED_RELATIONSHIP : ComponentType.RELATIONSHIP;
-		String relStr = relationshipToString(typeId, destId);
 		
+		//If this is a suppressed relationship, only allow it through if the concept would otherwise have no parents
+		//Concept parents having been modified by the pre-processing stage
+		if (r.getTypeId().equals(SCTID_CONCEPT_IS_A) && isSuppressed(r.getDestinationId())) {
+			ConceptImpl concept = (ConceptImpl)conceptMap.get(new Long(r.getSourceId()));
+			if (concept.getStatedParents().size() == 0) {
+				report (conceptId, componentType, id, ChangeType.WARNING, "Suppressed relationship being allowed due to lack of alternatives: " + toString(r));
+			} else {
+				report (conceptId, componentType, id, ChangeType.NONE, "Suppressing relationship " + toString(r));
+				return;
+			}
+		}
+			
 		//Have we seen this relationship before?
-		if (existingComponents.containsKey(id)) {
+		if (existingComponents.containsKey(new Long(r.getId()))) {
 			//What changes have been made?
 			Relationship existingRelationship = (Relationship)existingComponents.get(id);
-			 if (!existingRelationship.getActive().equals(lineItems[IDX_ACTIVE])) {
-				report (conceptId, componentType, id, ChangeType.MODIFIED, "Active state changed to " + lineItems[IDX_ACTIVE] + ": " + relStr);
+			boolean newActiveState = lineItems[IDX_ACTIVE].equals(ACTIVE_FLAG);
+			if (!existingRelationship.getActive().equals(newActiveState)) {
+				report (conceptId, componentType, id, newActiveState ? ChangeType.REACTIVATION :ChangeType.INACTIVATION , toString(r));
 			} else {
 				report (conceptId, componentType, id, ChangeType.UNKNOWN, "Unknown change.");
 			}
 		} else {
 			//Do we need to replace this extension relationship with a core one?
-			if (SnomedUtils.isExtensionNamespace(id.toString())) {
+			if (SnomedUtils.isExtensionNamespace(r.getId())) {
 				lineItems[IDX_ID] = relIdGenerator.getSCTID(PartionIdentifier.RELATIONSHIP);
-				id = new Long (lineItems[IDX_ID]);
+				id = new Long(lineItems[IDX_ID]);
 			}
 			//Report a new relationship being created
-			String msg = "New relationship: " + relStr; // + (newIdAssigned?" (reassigned id)":"");
 			if (lineItems[IDX_ACTIVE].equals(ACTIVE_FLAG)) {
-				report (conceptId, componentType, id, ChangeType.NEW, msg);
+				report (conceptId, componentType, id, ChangeType.NEW, toString(r));
 			} else {
 				report (conceptId, componentType, id, ChangeType.UNKNOWN, "Unexpected inactive state on new relationship");
 			}
@@ -360,15 +420,6 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		row[5] = descriptionId.toString();
 		row[6] = inactivationReasonSCTID;
 		inactivationIndicators.add(row);
-	}
-
-	private String relationshipToString(Long typeId, Long destId) throws ApplicationException {
-		String typeStr = SnomedUtils.deconstructFSN(conceptMap.get(typeId).getFsn())[0];
-		if (conceptMap.get(destId) == null) {
-			throw new ApplicationException ("No knowledge of concept " + destId + " used in relationship");
-		}
-		String destStr = SnomedUtils.deconstructFSN(conceptMap.get(destId).getFsn())[0];
-		return typeStr + " -> " + destId + "|"  + destStr + "|";
 	}
 
 	private void report(Long conceptId, ComponentType componentType, Long componentId, ChangeType changeType, String msg) {
@@ -481,5 +532,28 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 			}
 		}
 		return maxTargetEffectiveTime;
+	}
+	
+	public Relationship fromRf2(String[] lineItems) {
+		Relationship r = new RelationshipImpl (	lineItems[REL_IDX_ID],
+											lineItems[REL_IDX_EFFECTIVETIME],
+											lineItems[REL_IDX_ACTIVE],
+											lineItems[REL_IDX_MODULEID],
+											lineItems[REL_IDX_SOURCEID],
+											lineItems[REL_IDX_DESTINATIONID],
+											lineItems[REL_IDX_RELATIONSHIPGROUP],
+											lineItems[REL_IDX_TYPEID],
+											lineItems[REL_IDX_CHARACTERISTICTYPEID],
+											lineItems[REL_IDX_MODIFIERID]);
+		return r;
+	}
+	
+	public String toString(Relationship r) {
+		String typeStr = SnomedUtils.deconstructFSN(conceptMap.get(new Long(r.getTypeId())).getFsn())[0];
+		if (conceptMap.get(new Long(r.getDestinationId())) == null) {
+			throw new IllegalArgumentException ("No knowledge of concept " + r.getDestinationId() + " used in relationship");
+		}
+		String destStr = SnomedUtils.deconstructFSN(conceptMap.get(new Long(r.getDestinationId())).getFsn())[0];
+		return typeStr + " -> " + r.getDestinationId() + "|"  + destStr + "|";
 	}
 }
