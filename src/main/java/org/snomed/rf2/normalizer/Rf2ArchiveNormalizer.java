@@ -54,7 +54,8 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 	Map<Long, Object> existingComponents;
 	IdGenerator relIdGenerator;
 	IdGenerator descIdGenerator;
-	String[] suppressParents = new String[0];
+	String[] suppressParents = new String[0];  //Remove the parents
+	String[] filterParents = new String[0];  //Otherwise, only process these parents
 
 	String[] targetEffectiveTimes;
 	Long maxTargetEffectiveTime;
@@ -93,7 +94,8 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 			}
 			
 			for (Relationship r : c.getRelationships()) {
-				existingComponents.put(new Long(r.getId()), r);
+				Long relId = new Long(r.getId());
+				existingComponents.put(relId, r);
 			}
 		}
 	}
@@ -127,6 +129,9 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 			} else if (args[i].equals("-s")) {
 				suppressParents = (args[i+1]).split(COMMA);
 				print ("Suppressing parent relationships for " + args[i+1]);
+			}else if (args[i].equals("-f")) {
+				filterParents = (args[i+1]).split(COMMA);
+				print ("Only processing parent relationships for " + args[i+1]);
 			}
 		}
 		
@@ -159,13 +164,16 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 						Path p = Paths.get(ze.getName());
 						String fileName = p.getFileName().toString();
 						Rf2File rf2File = SnomedRf2File.getRf2File(fileName, FileType.DELTA);
-						filesProcessed.add(rf2File);
 						if (rf2File != null) {
 							List<String> lines = IOUtils.readLines(zis, "UTF-8");
 							if (suppressParents.length > 0 && rf2File.equals(Rf2File.STATED_RELATIONSHIP) ) {
 								preProcessRelationships(lines); 
 							}
-							processRf2Delta(lines, rf2File, fileName);
+							
+							if (filterParents.length == 0 || rf2File.equals(Rf2File.STATED_RELATIONSHIP) ) {
+								processRf2Delta(lines, rf2File, fileName);
+								filesProcessed.add(rf2File);
+							}
 						} else {
 							print ("Skipping unrecognised file: " + fileName);
 						}
@@ -183,11 +191,11 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		//TODO If original input also included inactivation indicators, then we'll have to merge the two files
 		outputInactivationIndicators();
 		
-		//We need to process the lang refset afterwards, once we know what all the SCTIDs have been mapped to
-		outputLangRefset();
-		
 		//Output headers for any files that we haven't processed
 		SnomedRf2File.outputHeaders(revisedDeltaLocation, filesProcessed, edition, FileType.DELTA, languageCode, maxTargetEffectiveTime.toString());
+		
+		//We need to process the lang refset afterwards, once we know what all the SCTIDs have been mapped to
+		outputLangRefset();
 	}
 
 	private void processRf2Delta(List<String> lines, Rf2File rf2File, String fileName) throws IOException, ApplicationException {
@@ -292,6 +300,15 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 		}
 		return false;
 	}
+	
+	private boolean isFiltered (String parent) {
+		for (String filtered : filterParents) {
+			if (parent.equals(filtered)) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	private void processRelationship(String[] lineItems, boolean isStated, PrintWriter out) throws NumberFormatException, ApplicationException {
 
@@ -310,6 +327,11 @@ public class Rf2ArchiveNormalizer implements SnomedConstants {
 				report (conceptId, componentType, id, ChangeType.NONE, "Suppressing relationship " + toString(r));
 				return;
 			}
+		}
+		
+		if (filterParents.length > 0 && !isFiltered(r.getDestinationId())) {
+			//This is not one of the parents we're looking for
+			return;
 		}
 			
 		//Have we seen this relationship before?
